@@ -1,0 +1,264 @@
+host: 0.0.0.0
+port: 18088
+workers: 1
+reload: false
+log_level: INFO
+nim_instances:
+- name: nim-integrate-api
+  base_url: https://integrate.api.nvidia.com
+  api_key: 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
+  models: []
+  weight: 100
+  max_concurrent: 10
+  timeout_seconds: 60.0
+  health_check_interval: 30
+  enabled: true
+  auto_discover: true
+gemini_instances:
+- name: gemini-default
+  api_key: "YOUR_GEMINI_API_KEY_HERE"
+  base_url: https://generativelanguage.googleapis.com/v1beta
+  models: []
+  weight: 100
+  max_concurrent: 50
+  timeout_seconds: 60.0
+  health_check_interval: 30
+  enabled: true
+  auto_discover: true
+ollama_instances:
+- name: ollama-local
+  base_url: http://localhost:11434
+  api_key: null
+  models: []
+  weight: 100
+  max_concurrent: 1
+  timeout_seconds: 300.0
+  health_check_interval: 15
+  enabled: true
+  keep_alive: 5m
+  gpu_layers: 999
+  env_vars:
+    CUDA_VISIBLE_DEVICES: '-1'
+    OLLAMA_VULKAN: '1'
+    GGML_VK_VISIBLE_DEVICES: '0'
+    OLLAMA_NUM_GPU: '999'
+    OLLAMA_FLASH_ATTENTION: '1'
+    OLLAMA_KV_CACHE_TYPE: q8_0
+    OLLAMA_NUM_PARALLEL: '1'
+  per_model_config:
+    qwen2.5-coder:7b:
+      quantization: Q4_K_M
+      context_window: 2048
+      context_window_extended: 4096
+      kv_cache_quant: Q8_0
+      num_gpu: 999
+      num_parallel: 1
+      max_loaded_models: 1
+      temperature: 0.0
+      flash_attention: true
+      description: Especialista em código - 100% GPU (performance máxima)
+    qwen3:8b-gpu90:
+      quantization: Q3_K_M
+      context_window: 4096
+      context_window_extended: 4096
+      kv_cache_quant: Q8_0
+      num_gpu: 32
+      num_parallel: 1
+      max_loaded_models: 1
+      temperature: 0.0
+      flash_attention: true
+      reasoning_effort_default: medium
+      reasoning_format: parsed
+      description: Reasoning nativo - 90% GPU (32/36 layers), 10% CPU
+    deepseek-coder:6.7b:
+      quantization: Q4_K_M
+      context_window: 2048
+      context_window_extended: 4096
+      kv_cache_quant: Q8_0
+      num_gpu: 99
+      num_batch: 128
+      num_parallel: 1
+      max_loaded_models: 1
+      temperature: 0.0
+      flash_attention: true
+      description: Otimizado GTX 1060 6GB - 100% GPU offload (num_gpu=99), contexto
+        2K, batch 128
+  defaults:
+    quantization: Q4_K_M
+    context_window: 2048
+    context_window_extended: 4096
+    kv_cache_quant: Q8_0
+    num_gpu: 999
+    num_parallel: 1
+    max_loaded_models: 1
+    temperature: 0.0
+    flash_attention: true
+    description: Configuração padrão Vulkan para GTX 1060 6GB
+rate_limits: {}
+default_rate_limit:
+  requests_per_minute: 60
+  tokens_per_minute: 100000
+  burst_allowance: 1.5
+  key_prefix: default
+circuit_breaker:
+  failure_threshold: 5
+  success_threshold: 2
+  timeout_seconds: 30.0
+  half_open_max_calls: 3
+admin_ui:
+  enabled: true
+  host: 0.0.0.0
+  port: 8082
+  auth_enabled: false
+  username: admin
+  password_hash: ''
+  session_timeout_minutes: 60
+metrics:
+  enabled: true
+  path: /metrics
+  port: 9090
+logging:
+  level: INFO
+  format: json
+  correlation_header: x-request-id
+  include_request_body: false
+  include_response_body: false
+  max_body_log_length: 1000
+stream_timeout_seconds: 300.0
+max_stream_buffer_size: 1048576
+max_request_body_size: 52428800
+max_concurrent_requests: 200
+default_model: nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b
+model_aliases:
+  fable: nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b
+  nemotron: nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b
+  nemotron-ultra: nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b
+  opus: gemini/gemini-2.5-pro
+  gemini-pro: gemini/gemini-2.5-pro
+  gemini-35-pro: gemini/gemini-2.5-pro
+  nemotron-safety: nvidia_nim/nvidia/llama-3.1-nemotron-safety-guard-8b-v3
+  sonnet: ollama/qwen2.5-coder:7b
+  qwen: ollama/qwen2.5-coder:7b
+  qwen-coder: ollama/qwen2.5-coder:7b
+  qwen2.5-coder: ollama/qwen2.5-coder:7b
+  qwen3: ollama/qwen3:8b
+  deepseek: ollama/deepseek-coder:6.7b
+  deepseek-coder: ollama/deepseek-coder:6.7b
+  gemini-flash: gemini/gemini-3.8-flash
+  gemini-38-flash: gemini/gemini-3.8-flash
+  gemini-35-flash: gemini/gemini-3.8-flash
+  gemini-flash-latest: gemini/gemini-3.8-flash
+  starcoder2: nvidia_nim/bigcode/starcoder2-15b
+  gemma-3-12b: nvidia_nim/google/gemma-3-12b-it
+  minimax-m3: nvidia_nim/minimaxai/minimax-m3.1-flash
+  glm-53-flash: nvidia_nim/z-ai/glm-5.3-flash
+  haiku: gemini/gemini-3.1-flash-lite
+  gemini-flash-lite: gemini/gemini-3.1-flash-lite
+  gemini-38-flash-lite: gemini/gemini-3.1-flash-lite
+  kimi-pro: custom/nim-direct/moonshotai/kimi-k3.1-pro
+  kimi: custom/nim-direct/moonshotai/kimi-k3.1-pro
+  gemini-35-flash-lite: gemini/gemini-3.5-flash-lite
+  deepseek-coder:6.7b: ollama/deepseek-coder:6.7b
+tier_routing:
+  fable:
+    description: Highest capability models (Nemotron 3 Ultra, largest models)
+    preferred_providers:
+    - nvidia_nim
+    fallback_tiers:
+    - opus
+    - sonnet
+  opus:
+    description: High capability models (large models 30B+)
+    preferred_providers:
+    - nvidia_nim
+    - gemini
+    fallback_tiers:
+    - sonnet
+    - haiku
+  sonnet:
+    description: Balanced capability models (7B-14B) - Qwen primary tier
+    preferred_providers:
+    - ollama
+    - gemini
+    fallback_tiers:
+    - haiku
+  haiku:
+    description: Fast/efficient models (1B-7B)
+    preferred_providers:
+    - ollama
+    - gemini
+    fallback_tiers: []
+fallback_chains:
+  ollama/qwen2.5-coder:7b:
+  - ollama/qwen3:8b
+  - ollama/deepseek-coder:6.7b
+  - gemini/gemini-3.8-flash
+  - gemini/gemini-3.5-flash
+  - nvidia_nim/bigcode/starcoder2-15b
+  ollama/qwen3:8b:
+  - ollama/qwen2.5-coder:7b
+  - ollama/deepseek-coder:6.7b
+  - gemini/gemini-3.8-flash
+  - nvidia_nim/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
+  ollama/deepseek-coder:6.7b:
+  - ollama/qwen2.5-coder:7b
+  - ollama/qwen3:8b
+  - gemini/gemini-3.5-flash
+  - nvidia_nim/bigcode/starcoder2-15b
+  nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b:
+  - gemini/gemini-3.8-flash
+  - ollama/qwen2.5-coder:7b
+  - nvidia_nim/nvidia/nemotron-3.5-super-vl-120b-a12b
+  nvidia_nim/nvidia/nemotron-3.5-super-vl-120b-a12b:
+  - nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b
+  - ollama/qwen2.5-coder:7b
+  nvidia_nim/bigcode/starcoder2-15b:
+  - ollama/deepseek-coder:6.7b
+  - gemini/gemini-3.8-flash
+  - ollama/qwen2.5-coder:7b
+  nvidia_nim/google/gemma-3-12b-it:
+  - gemini/gemma-4-26b-a4b-it
+  - gemini/gemini-3.8-flash
+  - ollama/qwen2.5-coder:7b
+  nvidia_nim/minimaxai/minimax-m3.1-flash:
+  - gemini/gemini-3.8-flash
+  - gemini/gemini-3.5-flash
+  - ollama/qwen2.5-coder:7b
+  nvidia_nim/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:
+  - ollama/qwen3:8b
+  - gemini/gemini-3.8-flash
+  gemini/gemini-3.8-flash:
+  - gemini/gemini-3.5-flash
+  - ollama/qwen2.5-coder:7b
+  - nvidia_nim/bigcode/starcoder2-15b
+  gemini/gemini-3.5-flash:
+  - gemini/gemini-3.8-flash
+  - ollama/qwen2.5-coder:7b
+  - nvidia_nim/bigcode/starcoder2-15b
+model_registry:
+  auto_discovery_enabled: true
+  discovery_interval_minutes: 30
+  preserve_last_valid_catalog: true
+  deduplication_strategy: keep_latest
+  health_check_on_discovery: true
+  cache_ttl_seconds: 300
+  persistence_enabled: true
+  persistence_path: data/model_registry.json
+reasoning_effort:
+  ollama:
+    low:
+      thinking_budget: 512
+      temperature: 0.7
+    medium:
+      thinking_budget: 2048
+      temperature: 0.5
+    high:
+      thinking_budget: 8192
+      temperature: 0.3
+  gemini:
+    low:
+      thinking_budget: 512
+    medium:
+      thinking_budget: 2048
+    high:
+      thinking_budget: 8192

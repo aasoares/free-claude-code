@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install ruff mypy pytest
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Type check (mypy)
+        run: mypy fcc_proxy/ main.py --ignore-missing-imports
+
+      - name: Syntax check
+        run: python -m py_compile main.py fcc_proxy/*.py
+
+      - name: Test imports
+        run: |
+          python -c "import fcc_proxy.discovery; import fcc_proxy.model_registry; import fcc_proxy.rate_limiterv2; print('All modules import OK')"

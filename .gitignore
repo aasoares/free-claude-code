@@ -1,0 +1,131 @@
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+
+# Virtual Environment
+.venv/
+venv/
+env/
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Distribution
+dist/
+build/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backups
+*.bak
+*_backup_*
+*.backup_*
+*.bak_*
+.envback
+.env.bak_*
+
+# Specific env files with keys (corrupted names from Windows copy)
+C\:FCCClaudeProxy.env*
+*FCCClaudeProxy.env*
+
+# Logs
+*.log
+logs/
+
+# Runtime
+*.pid
+*.sock
+
+# Temporary & Cache
+*.cache
+model_discovery_cache.json
+*.tmp
+*.temp
+
+# Screenshots & Images
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+
+# Documentation drafts & Reports
+*_REPORT.md
+*_AUDIT_REPORT.md
+COMPARISON_REPORT.md
+FASE2_MODEL_REGISTRY_REPORT.md
+HYBRID_PROXY_DOCS.md
+NVidia_Proxy_Module_Analysis_Report*.md
+RESUME_PROMPT.md
+
+# Backup/Copy files
+* - Copia*
+* - C?pia*
+* v0*
+hybrid - Copia.py
+hybrid v0.py
+hybrid_v1.1 - Copia.py
+server(1).py
+
+# Modelfile templates (generated)
+Modelfile.*
+
+# Test/debug files
+test_*.py
+test_*.ps1
+benchmark_runner.py
+ollama_benchmark.ps1
+ollama_stability_test.ps1
+write_report.ps1
+write_report_content.txt
+launch_*.py
+direct.py
+run_server.py
+main.py
+server.py
+serverback.py
+
+# Benchmark outputs
+ollama-model-benchmark/
+
+# Grafana/Prometheus configs (local)
+grafana-dashboard-*.json
+grafana-dashboards.yml
+grafana-datasources.yml
+prometheus.yml
+
+# Docker
+Dockerfile.*
+docker-compose.yml
+
+# Requirements (generated)
+requirements*.txt
+uv.lock
+pyproject.toml
+
+# FCC proxy submodule (if exists)
+fcc_proxy/
+nvidia_proxy/
+
+# Scripts (keep only essential)
+scripts/
+
+# Data files with secrets (use templates)
+data/custom_providers.json
+data/model_registry.json
