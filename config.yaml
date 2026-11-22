@@ -1,5 +1,5 @@
 host: 0.0.0.0
-port: 18088
+port: 10089
 workers: 1
 reload: false
 log_level: INFO
@@ -190,13 +190,13 @@ model_aliases:
   gemini-pro: gemini/gemini-2.5-pro
   gemini-35-pro: gemini/gemini-2.5-pro
   nemotron-safety: nvidia_nim/nvidia/llama-3.1-nemotron-safety-guard-8b-v3
-  sonnet: ollama/qwen2.5-coder:7b
-  qwen: ollama/qwen2.5-coder:7b
-  qwen-coder: ollama/qwen2.5-coder:7b
-  qwen2.5-coder: ollama/qwen2.5-coder:7b
-  qwen3: ollama/qwen3:8b
-  deepseek: ollama/deepseek-coder:6.7b
-  deepseek-coder: ollama/deepseek-coder:6.7b
+  sonnet: ollama/qwen2.5-coder:7b-gpu90
+  qwen: ollama/qwen2.5-coder:7b-gpu90
+  qwen-coder: ollama/qwen2.5-coder:7b-gpu90
+  qwen2.5-coder: ollama/qwen2.5-coder:7b-gpu90
+  qwen3: ollama/qwen3:8b-gpu90
+  deepseek: ollama/deepseek-coder:6.7b-gpu90
+  deepseek-coder: ollama/deepseek-coder:6.7b-gpu90
   gemini-flash: gemini/gemini-3.8-flash
   gemini-38-flash: gemini/gemini-3.8-flash
   gemini-35-flash: gemini/gemini-3.8-flash
@@ -246,20 +246,20 @@ tier_routing:
     - gemini
     fallback_tiers: []
 fallback_chains:
-  ollama/qwen2.5-coder:7b:
-  - ollama/qwen3:8b
-  - ollama/deepseek-coder:6.7b
+  ollama/qwen2.5-coder:7b-gpu90:
+  - ollama/qwen3:8b-gpu90
+  - ollama/deepseek-coder:6.7b-gpu90
   - gemini/gemini-3.8-flash
   - gemini/gemini-3.5-flash
   - nvidia_nim/bigcode/starcoder2-15b
-  ollama/qwen3:8b:
-  - ollama/qwen2.5-coder:7b
-  - ollama/deepseek-coder:6.7b
+  ollama/qwen3:8b-gpu90:
+  - ollama/qwen2.5-coder:7b-gpu90
+  - ollama/deepseek-coder:6.7b-gpu90
   - gemini/gemini-3.8-flash
   - nvidia_nim/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
-  ollama/deepseek-coder:6.7b:
-  - ollama/qwen2.5-coder:7b
-  - ollama/qwen3:8b
+  ollama/deepseek-coder:6.7b-gpu90:
+  - ollama/qwen2.5-coder:7b-gpu90
+  - ollama/qwen3:8b-gpu90
   - gemini/gemini-3.5-flash
   - nvidia_nim/bigcode/starcoder2-15b
   nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b:

@@ -54,15 +54,17 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
-load_dotenv()
+# Load .env from explicit path to ensure it works with Start-Job
+ENV_PATH = Path(r"C:\FCC\ClaudeProxy\.env")
+load_dotenv(dotenv_path=ENV_PATH, override=True)
 
 APP_NAME = "FCC Claude Proxy Hybrid (NVIDIA upstream)"
 VERSION = "1.2.0"
 HOST = os.getenv("CLAUDE_PROXY_HOST", "127.0.0.1")
-PORT = int(os.getenv("CLAUDE_PROXY_PORT", "8082"))
+PORT = int(os.getenv("CLAUDE_PROXY_PORT", "3456"))
 
 NVIDIA_PROXY_BASE_URL = os.getenv(
-    "NVIDIA_PROXY_BASE_URL", os.getenv("NVIDIA_PROXY_URL", "http://127.0.0.1:18088")
+    "NVIDIA_PROXY_BASE_URL", os.getenv("NVIDIA_PROXY_URL", "http://127.0.0.1:10089")
 ).rstrip("/")
 NVIDIA_CHAT_COMPLETIONS_URL = os.getenv(
     "NVIDIA_CHAT_COMPLETIONS_URL",
@@ -487,6 +489,7 @@ def build_openai_payload(payload: dict[str, Any]) -> dict[str, Any]:
     # FASE 4: Anthropic thinking -> OpenAI reasoning_effort translation
     # Anthropic thinking: {"type": "enabled", "budget_tokens": N}
     # OpenAI reasoning_effort: "low" | "medium" | "high"
+    # Also pass thinking to NVIDIA Proxy for Ollama think parameter
     thinking = payload.get("thinking")
     if thinking and isinstance(thinking, dict):
         budget = thinking.get("budget_tokens")
@@ -500,15 +503,22 @@ def build_openai_payload(payload: dict[str, Any]) -> dict[str, Any]:
             logger.debug(f"Anthropic thinking budget={budget} -> reasoning_effort={result['reasoning_effort']}")
         else:
             logger.debug("Anthropic thinking parameter omitted; upstream controls reasoning.")
+        # Pass thinking to NVIDIA Proxy for Ollama think parameter
+        result["thinking"] = thinking
 
     return result
 
 
 def openai_response_to_anthropic(data: dict[str, Any], model: str) -> dict[str, Any]:
+    # DEBUG: Force visible logging
+    print(f"[TRANSLATE DEBUG] model={model} data_keys={list(data.keys())}", flush=True)
     choices = data.get("choices") or []
     choice = choices[0] if choices else {}
     message = choice.get("message") or {}
+    print(f"[TRANSLATE DEBUG] message_keys={list(message.keys())} content={repr(message.get('content'))} reasoning={repr(message.get('reasoning_content'))}", flush=True)
     content: list[dict[str, Any]] = []
+
+    # Handle standard content
     text = message.get("content")
     if isinstance(text, str) and text:
         content.append({"type": "text", "text": text})
@@ -516,6 +526,14 @@ def openai_response_to_anthropic(data: dict[str, Any], model: str) -> dict[str, 
         for part in text:
             if isinstance(part, dict) and part.get("type") == "text":
                 content.append({"type": "text", "text": part.get("text", "")})
+
+    # Handle reasoning_content (Kimi/NIM-specific)
+    reasoning = message.get("reasoning_content")
+    print(f"[TRANSLATE DEBUG] reasoning check: isinstance={isinstance(reasoning, str)} reasoning={repr(reasoning)[:50]} content_empty={not content}", flush=True)
+    if isinstance(reasoning, str) and reasoning and not content:
+        # If no regular content, use reasoning_content as the response
+        content.append({"type": "text", "text": reasoning})
+        print(f"[TRANSLATE DEBUG] Used reasoning_content: {len(reasoning)} chars", flush=True)
 
     for call in message.get("tool_calls") or []:
         function = call.get("function") or {}
@@ -1025,6 +1043,7 @@ async def list_models(request: Request):
     """
     Lista todos os modelos disponíveis incluindo:
     - Modelos reais do NVIDIA Proxy
+    - Modelos do model_registry.json (NIM, Gemini, Ollama)
     - Aliases do config.yaml (ex: qwen, qwen3, deepseek, nemotron)
     - Custom providers registrados via API
     """
@@ -1038,8 +1057,12 @@ async def list_models(request: Request):
     # Obter modelos do upstream (com health check se habilitado)
     upstream_models = await get_healthy_models_from_upstream()
 
-    # Construir conjunto de IDs de modelos reais disponíveis
+    # Carregar modelos do model_registry.json
+    registry_models = await load_model_registry()
+
+    # Construir conjunto de IDs de modelos reais disponíveis (upstream + registry)
     real_model_ids = {m.get("id", "") for m in upstream_models}
+    real_model_ids.update(m.get("id", "") for m in registry_models)
 
     # Adicionar aliases que apontam para modelos reais disponíveis
     alias_models = []
@@ -1047,6 +1070,8 @@ async def list_models(request: Request):
         if target in real_model_ids:
             # Encontrar o modelo real para copiar metadados
             real_model = next((m for m in upstream_models if m.get("id") == target), None)
+            if not real_model:
+                real_model = next((m for m in registry_models if m.get("id") == target), None)
             if real_model:
                 alias_model = real_model.copy()
                 alias_model["id"] = alias
@@ -1068,13 +1093,51 @@ async def list_models(request: Request):
                     "parent": None,
                 })
 
-    # Combinar todos
-    all_models = upstream_models + alias_models + custom_models
+    # Combinar todos: upstream + registry + aliases + custom
+    all_models = upstream_models + registry_models + alias_models + custom_models
 
     return {
         "object": "list",
         "data": all_models,
     }
+
+
+async def load_model_registry() -> list[dict]:
+    """Carrega modelos do model_registry.json e converte para formato OpenAI."""
+    registry_path = Path("data/model_registry.json")
+    if not registry_path.exists():
+        logger.warning(f"Model registry not found at {registry_path}")
+        return []
+
+    try:
+        with open(registry_path) as f:
+            data = json.load(f)
+
+        entries = data.get("entries", {})
+        models = []
+
+        for public_id, entry in entries.items():
+            if not entry.get("enabled", True):
+                continue
+
+            # Converter para formato OpenAI models
+            model = {
+                "id": public_id,  # ex: nvidia_nim/bigcode/starcoder2-15b
+                "object": "model",
+                "created": int(time.time()),
+                "owned_by": entry.get("provider_id", "unknown"),
+                "permission": [],
+                "root": public_id,
+                "parent": None,
+            }
+            models.append(model)
+
+        logger.info(f"Loaded {len(models)} models from model_registry.json")
+        return models
+
+    except Exception as e:
+        logger.error(f"Failed to load model registry: {e}")
+        return []
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1275,6 +1338,10 @@ async def messages(request: Request):
     except (json.JSONDecodeError, UnicodeDecodeError):
         return error_response(400, "Invalid JSON request body.", "invalid_request_error")
 
+    # Garantir que aliases estejam carregados
+    if not MODEL_ALIASES:
+        await load_model_aliases()
+
     # Resolve model alias ANTES de construir payload OpenAI
     requested_model = payload.get("model", DEFAULT_MODEL)
     resolved_model = resolve_model_alias(requested_model)
@@ -1448,6 +1515,8 @@ async def messages(request: Request):
 
 if __name__ == "__main__":
     import uvicorn
+    # Windows fix: use string import to avoid double-bind on Windows
+    # uvicorn imports the module fresh, avoiding double execution of __main__
     uvicorn.run(
         "hybrid:app",
         host=HOST,
@@ -1455,4 +1524,5 @@ if __name__ == "__main__":
         reload=False,
         access_log=False,
         proxy_headers=False,
+        loop="asyncio",
     )
