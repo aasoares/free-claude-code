@@ -54,6 +54,15 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
+# VRAM Scheduler import
+try:
+    from vram_scheduler import VRAMScheduler, get_vram_scheduler, startup_vram_scheduler, shutdown_vram_scheduler
+    VRAM_SCHEDULER_AVAILABLE = True
+except ImportError as e:
+    VRAM_SCHEDULER_AVAILABLE = False
+    logger = logging.getLogger("FCC.CLAUDE-NVIDIA.HYBRID")
+    logger.warning(f"VRAM Scheduler not available: {e}")
+
 # Load .env from explicit path to ensure it works with Start-Job
 ENV_PATH = Path(r"C:\FCC\ClaudeProxy\.env")
 load_dotenv(dotenv_path=ENV_PATH, override=True)
@@ -254,6 +263,9 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 DEBUG_PAYLOADS = os.getenv("CLAUDE_PROXY_DEBUG_PAYLOADS", "false").lower() in {
     "1", "true", "yes", "on"
 }
+# VRAM Scheduler log level (info|debug)
+VRAM_LOG_LEVEL = os.getenv("VRAM_LOG_LEVEL", "info").lower()
+VRAM_LOG_DEBUG = VRAM_LOG_LEVEL == "debug"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -890,6 +902,19 @@ async def lifespan(app: FastAPI):
     app.state.semaphore = asyncio.Semaphore(MAX_CONCURRENT)
     app.state.stream_semaphore = asyncio.Semaphore(MAX_STREAMS)
 
+    # VRAM Scheduler initialization
+    if VRAM_SCHEDULER_AVAILABLE:
+        try:
+            await startup_vram_scheduler("C:/FCC/allinone/config.yaml")
+            app.state.vram_scheduler = get_vram_scheduler()
+            logger.info("VRAM Scheduler: ENABLED (GTX 1060 6GB tiered concurrency)")
+        except Exception as e:
+            logger.error(f"VRAM Scheduler init failed: {e}")
+            app.state.vram_scheduler = None
+    else:
+        app.state.vram_scheduler = None
+        logger.info("VRAM Scheduler: DISABLED (import failed)")
+
     logger.info("=" * 76)
     logger.info("FCC CLAUDE-COMPATIBLE NVIDIA PROXY HYBRID v%s STARTING", VERSION)
     logger.info("LISTEN  : http://%s:%s", HOST, PORT)
@@ -910,6 +935,12 @@ async def lifespan(app: FastAPI):
     yield
 
     logger.info("FCC Claude/NVIDIA Proxy Hybrid v%s shutting down", VERSION)
+    if VRAM_SCHEDULER_AVAILABLE and app.state.vram_scheduler:
+        try:
+            await shutdown_vram_scheduler()
+            logger.info("VRAM Scheduler: shutdown complete")
+        except Exception as e:
+            logger.error(f"VRAM Scheduler shutdown error: {e}")
     await app.state.http.aclose()
 
 
@@ -1036,6 +1067,19 @@ async def diagnostics():
         "auth_enabled": AUTH_ENABLED,
         "debug_payloads": DEBUG_PAYLOADS,
     }
+
+
+@app.get("/vram/status")
+async def vram_status(request: Request):
+    """VRAM Scheduler status (GTX 1060 6GB tiered concurrency)."""
+    vram_scheduler = request.app.state.vram_scheduler if hasattr(request.app.state, 'vram_scheduler') else None
+    if not vram_scheduler:
+        return {"vram_scheduler": "disabled", "reason": "Not initialized or unavailable"}
+    try:
+        return await vram_scheduler.get_status()
+    except Exception as e:
+        logger.error(f"VRAM status error: {e}")
+        return {"vram_scheduler": "error", "message": str(e)}
 
 
 @app.get("/v1/models")
@@ -1354,8 +1398,29 @@ async def messages(request: Request):
     message_list = openai_payload.get("messages", [])
     tool_list = openai_payload.get("tools", [])
 
+    # VRAM Scheduler: check if this is an Ollama model (runs on local GPU)
+    is_ollama_model = model.startswith("ollama/")
+    vram_scheduler = request.app.state.vram_scheduler if hasattr(request.app.state, 'vram_scheduler') else None
+    vram_acquired = False
+    model_tier = None
+
+    if is_ollama_model and vram_scheduler:
+        # Extract model name from ollama/ prefix (e.g., "ollama/qwen3:8b-gpu90" -> "qwen3:8b-gpu90")
+        ollama_model_name = model.replace("ollama/", "")
+        profile = vram_scheduler.get_profile(ollama_model_name)
+        if profile:
+            model_tier = profile.concurrency_tier.value
+            if VRAM_LOG_DEBUG:
+                logger.debug(f"[VRAM] model={ollama_model_name} tier={model_tier} vram={profile.vram_mb}MB")
+            else:
+                logger.info(f"[VRAM] model={ollama_model_name} tier={model_tier} vram={profile.vram_mb}MB")
+            # Acquire VRAM slot before proceeding
+            vram_acquired = await vram_scheduler.acquire_model(ollama_model_name)
+            if not vram_acquired:
+                return error_response(503, f"VRAM unavailable for model {ollama_model_name}. Try again later.", "vram_unavailable")
+
     # Verificar se é modelo de custom provider (formato: custom/{provider_id}/{model_id})
-    logger.debug(f"[ROUTING] model='{model}', is_custom_provider={model.startswith('custom/')}")
+    logger.debug(f"[ROUTING] model='{model}', is_custom_provider={model.startswith('custom/')}, is_ollama={is_ollama_model}")
     is_custom_provider = model.startswith("custom/")
     custom_provider_config = None
     upstream_url = NVIDIA_CHAT_COMPLETIONS_URL
@@ -1420,6 +1485,8 @@ async def messages(request: Request):
             stream_semaphore.release()
         if semaphore_acquired:
             semaphore.release()
+        if vram_acquired and vram_scheduler:
+            await vram_scheduler.release_model(ollama_model_name)
         logger.error("[TIMEOUT] id=%s upstream timed out after read_timeout=%ss",
                      request.state.request_id, READ_TIMEOUT)
         return error_response(504, "NVIDIA Proxy request timed out.", "timeout_error")
@@ -1428,6 +1495,8 @@ async def messages(request: Request):
             stream_semaphore.release()
         if semaphore_acquired:
             semaphore.release()
+        if vram_acquired and vram_scheduler:
+            await vram_scheduler.release_model(ollama_model_name)
         logger.exception("[CONNECTION-ERROR] id=%s upstream_error=%s",
                          request.state.request_id, type(exc).__name__)
         return error_response(502, "Could not connect to NVIDIA Proxy on the configured endpoint.", "upstream_error")
@@ -1436,6 +1505,8 @@ async def messages(request: Request):
             stream_semaphore.release()
         if semaphore_acquired:
             semaphore.release()
+        if vram_acquired and vram_scheduler:
+            await vram_scheduler.release_model(ollama_model_name)
         logger.exception("request_id=%s proxy_request_error", request.state.request_id)
         return error_response(500, "Unexpected proxy error.")
 
@@ -1469,6 +1540,8 @@ async def messages(request: Request):
                 if stream_slot_acquired:
                     stream_semaphore.release()
                 semaphore.release()
+                if vram_acquired and vram_scheduler:
+                    await vram_scheduler.release_model(ollama_model_name)
 
         return StreamingResponse(
             stream_and_release(),
@@ -1507,6 +1580,8 @@ async def messages(request: Request):
         if stream_slot_acquired:
             stream_semaphore.release()
         semaphore.release()
+        if vram_acquired and vram_scheduler:
+            await vram_scheduler.release_model(ollama_model_name)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
