@@ -45,7 +45,12 @@ ollama_instances:
     OLLAMA_FLASH_ATTENTION: '1'
     OLLAMA_KV_CACHE_TYPE: q8_0
     OLLAMA_NUM_PARALLEL: '1'
+  # VRAM-Aware Concurrency Strategy (GTX 1060 6GB = ~5.5GB usable)
+  concurrency_strategy: "tiered"
+  vram_total_mb: 5500
+  vram_safety_margin_mb: 500
   per_model_config:
+    # TIER: heavy (single-load only, ~4-5GB each)
     qwen2.5-coder:7b:
       quantization: Q4_K_M
       context_window: 2048
@@ -54,6 +59,8 @@ ollama_instances:
       num_gpu: 999
       num_parallel: 1
       max_loaded_models: 1
+      concurrency_tier: "heavy"
+      vram_mb: 4200
       temperature: 0.0
       flash_attention: true
       description: Especialista em código - 100% GPU (performance máxima)
@@ -65,6 +72,8 @@ ollama_instances:
       num_gpu: 32
       num_parallel: 1
       max_loaded_models: 1
+      concurrency_tier: "heavy"
+      vram_mb: 4800
       temperature: 0.0
       flash_attention: true
       reasoning_effort_default: medium
@@ -79,10 +88,52 @@ ollama_instances:
       num_batch: 128
       num_parallel: 1
       max_loaded_models: 1
+      concurrency_tier: "heavy"
+      vram_mb: 4000
       temperature: 0.0
       flash_attention: true
       description: Otimizado GTX 1060 6GB - 100% GPU offload (num_gpu=99), contexto
         2K, batch 128
+    # TIER: light (dual-load OK, ~1-1.5GB each)
+    qwen2.5-coder:1.5b:
+      quantization: Q4_K_M
+      context_window: 2048
+      context_window_extended: 4096
+      kv_cache_quant: Q8_0
+      num_gpu: 999
+      num_parallel: 1
+      max_loaded_models: 2
+      concurrency_tier: "light"
+      vram_mb: 1000
+      temperature: 0.0
+      flash_attention: true
+      description: Modelo leve para concorrência - 1.5B params
+    qwen2.5:0.5b:
+      quantization: Q4_K_M
+      context_window: 2048
+      context_window_extended: 4096
+      kv_cache_quant: Q8_0
+      num_gpu: 999
+      num_parallel: 1
+      max_loaded_models: 2
+      concurrency_tier: "light"
+      vram_mb: 400
+      temperature: 0.0
+      flash_attention: true
+      description: Modelo micro para alta concorrência - 0.5B params
+    tinyllama:1.1b:
+      quantization: Q4_K_M
+      context_window: 2048
+      context_window_extended: 4096
+      kv_cache_quant: Q8_0
+      num_gpu: 999
+      num_parallel: 1
+      max_loaded_models: 2
+      concurrency_tier: "light"
+      vram_mb: 700
+      temperature: 0.0
+      flash_attention: true
+      description: Modelo leve alternativo - 1.1B params
   defaults:
     quantization: Q4_K_M
     context_window: 2048
@@ -91,6 +142,8 @@ ollama_instances:
     num_gpu: 999
     num_parallel: 1
     max_loaded_models: 1
+    concurrency_tier: "heavy"
+    vram_mb: 4000
     temperature: 0.0
     flash_attention: true
     description: Configuração padrão Vulkan para GTX 1060 6GB
@@ -159,6 +212,10 @@ model_aliases:
   kimi: custom/nim-direct/moonshotai/kimi-k3.1-pro
   gemini-35-flash-lite: gemini/gemini-3.5-flash-lite
   deepseek-coder:6.7b: ollama/deepseek-coder:6.7b
+  # Light models for concurrency (Tier: light)
+  qwen-light: ollama/qwen2.5-coder:1.5b
+  qwen-micro: ollama/qwen2.5:0.5b
+  tinyllama: ollama/tinyllama:1.1b
 tier_routing:
   fable:
     description: Highest capability models (Nemotron 3 Ultra, largest models)
