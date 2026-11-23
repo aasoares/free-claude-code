@@ -54,6 +54,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
+# Prometheus metrics
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
+
 # VRAM Scheduler import
 try:
     from vram_scheduler import VRAMScheduler, get_vram_scheduler, startup_vram_scheduler, shutdown_vram_scheduler
@@ -64,7 +67,9 @@ except ImportError as e:
     logger.warning(f"VRAM Scheduler not available: {e}")
 
 # Load .env from explicit path to ensure it works with Start-Job
-ENV_PATH = Path(r"C:\FCC\ClaudeProxy\.env")
+# Use FCC_CONFIG_PATH (should point to config.yaml) or default to allinone/config.yaml
+config_path = os.getenv("FCC_CONFIG_PATH", "C:/FCC/allinone/config.yaml")
+ENV_PATH = Path(config_path).parent / ".env"
 load_dotenv(dotenv_path=ENV_PATH, override=True)
 
 APP_NAME = "FCC Claude Proxy Hybrid (NVIDIA upstream)"
@@ -102,7 +107,7 @@ AUTH_ENABLED = os.getenv("CLAUDE_PROXY_AUTH_ENABLED", "true").lower() in {
 # ════════════════════════════════════════════════════════════════════════════════
 
 # Config path
-CONFIG_PATH = Path(os.getenv("FCC_CONFIG_PATH", "C:/FCC/ClaudeProxy/config.yaml"))
+CONFIG_PATH = Path(os.getenv("FCC_CONFIG_PATH", "C:/FCC/allinone/config.yaml"))
 
 # Load model aliases from config.yaml
 MODEL_ALIASES: dict[str, str] = {}
@@ -266,6 +271,138 @@ DEBUG_PAYLOADS = os.getenv("CLAUDE_PROXY_DEBUG_PAYLOADS", "false").lower() in {
 # VRAM Scheduler log level (info|debug)
 VRAM_LOG_LEVEL = os.getenv("VRAM_LOG_LEVEL", "info").lower()
 VRAM_LOG_DEBUG = VRAM_LOG_LEVEL == "debug"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# PROMETHEUS METRICS
+# ──────────────────────────────────────────────────────────────────────────────
+
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST, REGISTRY
+
+# Guard against duplicate metric registration (uvicorn string import reloads module)
+def _get_or_create_metric(metric_class, name, documentation, *args, **kwargs):
+    """Get existing metric from default registry or create new one."""
+    # Check if metric already exists in default registry
+    # REGISTRY._collector_to_names maps collector -> set of metric names
+    for collector, names in REGISTRY._collector_to_names.items():
+        if name in names:
+            return collector
+    # Create new metric (will auto-register to default registry)
+    return metric_class(name, documentation, *args, **kwargs)
+
+# Request metrics
+REQUESTS_TOTAL = _get_or_create_metric(Counter,
+    "hybrid_proxy_requests_total",
+    "Total number of requests processed",
+    ["method", "endpoint", "status"]
+)
+
+REQUEST_DURATION = _get_or_create_metric(Histogram,
+    "hybrid_proxy_request_duration_seconds",
+    "Request duration in seconds",
+    ["method", "endpoint"],
+    buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 60.0, 120.0, 300.0]
+)
+
+# Upstream metrics
+UPSTREAM_REQUESTS_TOTAL = _get_or_create_metric(Counter,
+    "hybrid_proxy_upstream_requests_total",
+    "Total number of upstream requests",
+    ["provider", "model", "status"]
+)
+
+UPSTREAM_REQUEST_DURATION = _get_or_create_metric(Histogram,
+    "hybrid_proxy_upstream_request_duration_seconds",
+    "Upstream request duration in seconds",
+    ["provider", "model"],
+    buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 60.0, 120.0, 300.0]
+)
+
+# Streaming metrics
+STREAM_CHUNKS_TOTAL = _get_or_create_metric(Counter,
+    "hybrid_proxy_stream_chunks_total",
+    "Total number of SSE stream chunks sent",
+    ["model"]
+)
+
+STREAM_DURATION = _get_or_create_metric(Histogram,
+    "hybrid_proxy_stream_duration_seconds",
+    "Stream duration in seconds",
+    ["model"],
+    buckets=[0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0]
+)
+
+# VRAM Scheduler metrics (imported from vram_scheduler to avoid duplicates)
+try:
+    from vram_scheduler import (
+        VRAM_MODELS_LOADED,
+        VRAM_USAGE_MB,
+        VRAM_FREE_MB,
+        VRAM_LOAD_DURATION,
+        VRAM_OFFLOAD_DURATION,
+        VRAM_ACQUIRE_TOTAL,
+    )
+except ImportError:
+    # Dummy metrics if vram_scheduler not available
+    class _Dummy:
+        def inc(self, *args, **kwargs): pass
+        def dec(self, *args, **kwargs): pass
+        def set(self, *args, **kwargs): pass
+        def observe(self, *args, **kwargs): pass
+        def labels(self, *args, **kwargs): return self
+    VRAM_MODELS_LOADED = _Dummy()
+    VRAM_USAGE_MB = _Dummy()
+    VRAM_FREE_MB = _Dummy()
+    VRAM_LOAD_DURATION = _Dummy()
+    VRAM_OFFLOAD_DURATION = _Dummy()
+    VRAM_ACQUIRE_TOTAL = _Dummy()
+
+# Rate limiting metrics
+RATE_LIMIT_CURRENT_RPM = _get_or_create_metric(Gauge,
+    "hybrid_proxy_rate_limit_current_rpm",
+    "Current requests per minute limit"
+)
+
+RATE_LIMIT_429_TOTAL = _get_or_create_metric(Counter,
+    "hybrid_proxy_rate_limit_429_total",
+    "Total number of 429 responses from upstream"
+)
+
+# Auth metrics
+AUTH_FAILURES_TOTAL = _get_or_create_metric(Counter,
+    "hybrid_proxy_auth_failures_total",
+    "Total number of authentication failures"
+)
+
+# Token usage metrics (from responses)
+TOKENS_INPUT_TOTAL = _get_or_create_metric(Counter,
+    "hybrid_proxy_tokens_input_total",
+    "Total input tokens processed",
+    ["model"]
+)
+
+TOKENS_OUTPUT_TOTAL = _get_or_create_metric(Counter,
+    "hybrid_proxy_tokens_output_total",
+    "Total output tokens generated",
+    ["model"]
+)
+
+# Error metrics
+ERRORS_TOTAL = _get_or_create_metric(Counter,
+    "hybrid_proxy_errors_total",
+    "Total number of errors",
+    ["endpoint", "error_type"]
+)
+
+# Active connections
+ACTIVE_REQUESTS = _get_or_create_metric(Gauge,
+    "hybrid_proxy_active_requests",
+    "Number of currently active requests"
+)
+
+ACTIVE_STREAMS = _get_or_create_metric(Gauge,
+    "hybrid_proxy_active_streams",
+    "Number of currently active streaming requests"
+)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -561,11 +698,16 @@ def openai_response_to_anthropic(data: dict[str, Any], model: str) -> dict[str, 
         })
 
     usage = data.get("usage") or {}
+
+    # Use the model from the upstream response (actual model that served the request)
+    # This is critical for fallback chains - the response should reflect which model actually generated the response
+    actual_model = data.get("model", model)
+
     return {
         "id": data.get("id") or f"msg_{uuid.uuid4().hex}",
         "type": "message",
         "role": "assistant",
-        "model": model,
+        "model": actual_model,
         "content": content,
         "stop_reason": map_stop_reason(choice.get("finish_reason")),
         "stop_sequence": None,
@@ -593,20 +735,15 @@ def sse(event: str, data: dict[str, Any]) -> bytes:
 async def anthropic_stream_from_openai(
     upstream: httpx.Response, model: str, request_id: str
 ) -> AsyncIterator[bytes]:
+    """
+    Translates OpenAI SSE stream to Anthropic SSE stream.
+
+    Captures the actual model from the first upstream chunk (which includes the model field)
+    to correctly report which model served the request (critical for fallback chains).
+    """
     message_id = f"msg_{uuid.uuid4().hex}"
-    yield sse("message_start", {
-        "type": "message_start",
-        "message": {
-            "id": message_id,
-            "type": "message",
-            "role": "assistant",
-            "model": model,
-            "content": [],
-            "stop_reason": None,
-            "stop_sequence": None,
-            "usage": {"input_tokens": 0, "output_tokens": 0},
-        },
-    })
+    actual_model = model  # Default to requested model, will be updated from upstream
+    message_start_sent = False
 
     text_block_started = False
     text_block_index = 0
@@ -632,6 +769,10 @@ async def anthropic_stream_from_openai(
                 except json.JSONDecodeError:
                     continue
 
+                # Capture actual model from first upstream chunk that has it
+                if not message_start_sent and item.get("model"):
+                    actual_model = item["model"]
+
                 usage = item.get("usage") or {}
                 input_tokens = int(usage.get("prompt_tokens", input_tokens) or 0)
                 output_tokens = int(usage.get("completion_tokens", output_tokens) or 0)
@@ -643,6 +784,23 @@ async def anthropic_stream_from_openai(
                 delta = choice.get("delta") or {}
                 if choice.get("finish_reason"):
                     finish_reason = choice["finish_reason"]
+
+                # Send message_start on first valid chunk (with actual model from upstream)
+                if not message_start_sent:
+                    yield sse("message_start", {
+                        "type": "message_start",
+                        "message": {
+                            "id": message_id,
+                            "type": "message",
+                            "role": "assistant",
+                            "model": actual_model,
+                            "content": [],
+                            "stop_reason": None,
+                            "stop_sequence": None,
+                            "usage": {"input_tokens": 0, "output_tokens": 0},
+                        },
+                    })
+                    message_start_sent = True
 
                 text_delta = delta.get("content")
                 if isinstance(text_delta, str) and text_delta:
@@ -689,6 +847,22 @@ async def anthropic_stream_from_openai(
                                 "partial_json": args_fragment,
                             },
                         })
+
+        # If no chunks were received, still send message_start with original model
+        if not message_start_sent:
+            yield sse("message_start", {
+                "type": "message_start",
+                "message": {
+                    "id": message_id,
+                    "type": "message",
+                    "role": "assistant",
+                    "model": actual_model,
+                    "content": [],
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 0, "output_tokens": 0},
+                },
+            })
 
         if text_block_started:
             yield sse("content_block_stop", {
@@ -835,13 +1009,28 @@ async def send_upstream_with_retry(
 ) -> httpx.Response:
     """Send a streaming-capable request; retry only 429s before response streaming starts."""
     target_url = upstream_url or NVIDIA_CHAT_COMPLETIONS_URL
+    model = payload.get("model", "unknown")
+
+    # Determine provider from model
+    if model.startswith("ollama/"):
+        provider = "ollama"
+    elif model.startswith("nvidia_nim/"):
+        provider = "nvidia_nim"
+    elif model.startswith("gemini/"):
+        provider = "gemini"
+    elif model.startswith("custom/"):
+        provider = "custom"
+    else:
+        provider = "unknown"
+
+    upstream_start = time.perf_counter()
     response: httpx.Response | None = None
     for attempt in range(MAX_RETRIES + 1):
         await rate_limiter.acquire()
         logger.info(
             "UPSTREAM SEND | request_id=%s | attempt=%d/%d | model=%s | url=%s | rpm=%s",
             request_id, attempt + 1, MAX_RETRIES + 1,
-            payload.get("model"), target_url, rate_limiter.snapshot()
+            model, target_url, rate_limiter.snapshot()
         )
         request = client.build_request(
             "POST", target_url, headers=headers, json=payload
@@ -849,11 +1038,20 @@ async def send_upstream_with_retry(
         response = await client.send(request, stream=True)
 
         if response.status_code != 429:
+            upstream_duration = time.perf_counter() - upstream_start
+            UPSTREAM_REQUEST_DURATION.labels(provider=provider, model=model).observe(upstream_duration)
+            UPSTREAM_REQUESTS_TOTAL.labels(provider=provider, model=model, status=str(response.status_code)).inc()
             return response
+
+        # Track 429
+        RATE_LIMIT_429_TOTAL.inc()
 
         await rate_limiter.on_429()
         if attempt >= MAX_RETRIES:
             logger.error("429 RETRIES EXHAUSTED | request_id=%s", request_id)
+            upstream_duration = time.perf_counter() - upstream_start
+            UPSTREAM_REQUEST_DURATION.labels(provider=provider, model=model).observe(upstream_duration)
+            UPSTREAM_REQUESTS_TOTAL.labels(provider=provider, model=model, status="429").inc()
             return response
 
         retry_after = get_retry_after_seconds(response)
@@ -869,6 +1067,9 @@ async def send_upstream_with_retry(
         await asyncio.sleep(delay)
 
     assert response is not None
+    upstream_duration = time.perf_counter() - upstream_start
+    UPSTREAM_REQUEST_DURATION.labels(provider=provider, model=model).observe(upstream_duration)
+    UPSTREAM_REQUESTS_TOTAL.labels(provider=provider, model=model, status=str(response.status_code)).inc()
     return response
 
 
@@ -905,15 +1106,36 @@ async def lifespan(app: FastAPI):
     # VRAM Scheduler initialization
     if VRAM_SCHEDULER_AVAILABLE:
         try:
-            await startup_vram_scheduler("C:/FCC/allinone/config.yaml")
-            app.state.vram_scheduler = get_vram_scheduler()
-            logger.info("VRAM Scheduler: ENABLED (GTX 1060 6GB tiered concurrency)")
+            vram_log_level = getattr(logging, VRAM_LOG_LEVEL.upper(), logging.INFO)
+            await startup_vram_scheduler("C:/FCC/allinone/config.yaml", log_level=vram_log_level)
+            app.state.vram_scheduler = get_vram_scheduler("C:/FCC/allinone/config.yaml", log_level=vram_log_level)
+            logger.info("VRAM Scheduler: ENABLED (GTX 1060 6GB tiered concurrency, log_level=%s)", VRAM_LOG_LEVEL)
         except Exception as e:
             logger.error(f"VRAM Scheduler init failed: {e}")
             app.state.vram_scheduler = None
     else:
         app.state.vram_scheduler = None
         logger.info("VRAM Scheduler: DISABLED (import failed)")
+
+    # VRAM Cleanup background task (every 60 seconds, checks 300s idle timeout)
+    async def vram_cleanup_task():
+        """Periodically unload idle models from VRAM."""
+        if not VRAM_SCHEDULER_AVAILABLE or not app.state.vram_scheduler:
+            return
+        try:
+            while True:
+                await asyncio.sleep(60)  # 1 minute (checks more frequently than idle timeout)
+                try:
+                    await app.state.vram_scheduler.cleanup_idle(300)
+                    if VRAM_LOG_DEBUG:
+                        logger.debug("VRAM cleanup task executed")
+                except Exception as e:
+                    logger.warning(f"VRAM cleanup task error: {e}")
+        except asyncio.CancelledError:
+            logger.info("VRAM cleanup task cancelled")
+
+    cleanup_task = asyncio.create_task(vram_cleanup_task())
+    app.state.vram_cleanup_task = cleanup_task
 
     logger.info("=" * 76)
     logger.info("FCC CLAUDE-COMPATIBLE NVIDIA PROXY HYBRID v%s STARTING", VERSION)
@@ -935,6 +1157,13 @@ async def lifespan(app: FastAPI):
     yield
 
     logger.info("FCC Claude/NVIDIA Proxy Hybrid v%s shutting down", VERSION)
+    # Cancel VRAM cleanup task
+    if hasattr(app.state, 'vram_cleanup_task'):
+        app.state.vram_cleanup_task.cancel()
+        try:
+            await app.state.vram_cleanup_task
+        except asyncio.CancelledError:
+            pass
     if VRAM_SCHEDULER_AVAILABLE and app.state.vram_scheduler:
         try:
             await shutdown_vram_scheduler()
@@ -966,6 +1195,18 @@ async def authenticate_and_log(request: Request, call_next):
     request.state.request_id = request_id
     start = time.perf_counter()
 
+    # Track active requests
+    ACTIVE_REQUESTS.inc()
+
+    # Determine endpoint for metrics (normalize path)
+    endpoint = request.url.path
+    if endpoint.startswith("/v1/messages"):
+        endpoint = "/v1/messages"
+    elif endpoint.startswith("/v1/models"):
+        endpoint = "/v1/models"
+    elif endpoint.startswith("/v1/custom/providers"):
+        endpoint = "/v1/custom/providers"
+
     logger.debug(
         "[INCOMING] id=%s method=%s path=%s client=%s content_length=%s content_type=%s",
         request_id, request.method, request.url.path,
@@ -978,30 +1219,51 @@ async def authenticate_and_log(request: Request, call_next):
     if protected and AUTH_ENABLED:
         if not CLIENT_API_KEY:
             logger.error("[AUTH] id=%s blocked: client key is not configured", request_id)
+            AUTH_FAILURES_TOTAL.inc()
+            ACTIVE_REQUESTS.dec()
             return error_response(503, "Local client authentication is not configured.", "configuration_error")
         if not secrets.compare_digest(get_client_key(request), CLIENT_API_KEY):
             logger.warning("[AUTH] id=%s rejected: invalid client credential", request_id)
+            AUTH_FAILURES_TOTAL.inc()
+            ACTIVE_REQUESTS.dec()
             return error_response(401, "Invalid local proxy API key.", "authentication_error")
         logger.debug("[AUTH] id=%s client authentication accepted", request_id)
 
     try:
         response = await call_next(request)
     except Exception:
-        elapsed = (time.perf_counter() - start) * 1000
+        elapsed = (time.perf_counter() - start)
+        REQUEST_DURATION.labels(method=request.method, endpoint=endpoint).observe(elapsed)
+        REQUESTS_TOTAL.labels(method=request.method, endpoint=endpoint, status="500").inc()
+        ACTIVE_REQUESTS.dec()
         logger.exception("[UNHANDLED] id=%s method=%s path=%s elapsed_ms=%.1f",
-                         request_id, request.method, request.url.path, elapsed)
+                         request_id, request.method, request.url.path, elapsed * 1000)
         raise
 
     response.headers["x-request-id"] = request_id
-    elapsed = (time.perf_counter() - start) * 1000
-    level = logging.ERROR if response.status_code >= 500 else (
-        logging.WARNING if response.status_code >= 400 else logging.INFO
+    elapsed = (time.perf_counter() - start)
+    status_code = response.status_code
+
+    # Record metrics
+    REQUEST_DURATION.labels(method=request.method, endpoint=endpoint).observe(elapsed)
+    REQUESTS_TOTAL.labels(method=request.method, endpoint=endpoint, status=str(status_code)).inc()
+
+    # Track errors
+    if status_code >= 500:
+        ERRORS_TOTAL.labels(endpoint=endpoint, error_type="server_error").inc()
+    elif status_code >= 400:
+        ERRORS_TOTAL.labels(endpoint=endpoint, error_type="client_error").inc()
+
+    level = logging.ERROR if status_code >= 500 else (
+        logging.WARNING if status_code >= 400 else logging.INFO
     )
     logger.log(
         level, "[OUTGOING] id=%s method=%s path=%s status=%s elapsed_ms=%.1f response_type=%s",
-        request_id, request.method, request.url.path, response.status_code, elapsed,
+        request_id, request.method, request.url.path, status_code, elapsed * 1000,
         response.headers.get("content-type", "unknown"),
     )
+
+    ACTIVE_REQUESTS.dec()
     return response
 
 
@@ -1067,6 +1329,12 @@ async def diagnostics():
         "auth_enabled": AUTH_ENABLED,
         "debug_payloads": DEBUG_PAYLOADS,
     }
+
+
+@app.get("/metrics")
+async def metrics():
+    """Prometheus metrics endpoint."""
+    return Response(content=generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/vram/status")
@@ -1528,14 +1796,21 @@ async def messages(request: Request):
             semaphore.release()
 
     wants_stream = bool(openai_payload.get("stream"))
+    stream_start = time.perf_counter()
     if wants_stream:
         async def stream_and_release() -> AsyncIterator[bytes]:
+            chunk_count = 0
             try:
                 async for event in anthropic_stream_from_openai(
                     upstream, model, request.state.request_id
                 ):
+                    chunk_count += 1
+                    STREAM_CHUNKS_TOTAL.labels(model=model).inc()
                     yield event
             finally:
+                stream_duration = time.perf_counter() - stream_start
+                STREAM_DURATION.labels(model=model).observe(stream_duration)
+                ACTIVE_STREAMS.dec()
                 await upstream.aclose()
                 if stream_slot_acquired:
                     stream_semaphore.release()
@@ -1543,6 +1818,7 @@ async def messages(request: Request):
                 if vram_acquired and vram_scheduler:
                     await vram_scheduler.release_model(ollama_model_name)
 
+        ACTIVE_STREAMS.inc()
         return StreamingResponse(
             stream_and_release(),
             media_type="text/event-stream",
@@ -1562,12 +1838,19 @@ async def messages(request: Request):
 
         translated = openai_response_to_anthropic(data, model)
 
+        # Record token usage metrics
+        usage = translated.get("usage", {})
+        input_tokens = usage.get("input_tokens", 0)
+        output_tokens = usage.get("output_tokens", 0)
+        if input_tokens:
+            TOKENS_INPUT_TOTAL.labels(model=model).inc(input_tokens)
+        if output_tokens:
+            TOKENS_OUTPUT_TOTAL.labels(model=model).inc(output_tokens)
+
         logger.info(
             "[TRANSLATED] id=%s response_id=%s stop_reason=%s input_tokens=%s output_tokens=%s blocks=%s",
             request.state.request_id, translated.get("id"), translated.get("stop_reason"),
-            translated.get("usage", {}).get("input_tokens"),
-            translated.get("usage", {}).get("output_tokens"),
-            len(translated.get("content", [])),
+            input_tokens, output_tokens, len(translated.get("content", [])),
         )
         if DEBUG_PAYLOADS:
             logger.debug("[RESPONSE-PAYLOAD] id=%s payload=%s",
