@@ -14,9 +14,9 @@ cd C:\FCC\ClaudeProxy
 cp .env.example .env
 # Edit .env with your NGC_API_KEY (get from https://ngc.nvidia.com/setup/api-key)
 
-# 3. Start full stack (Ollama Vulkan + NVIDIA Proxy 18088 + Hybrid Proxy 8082)
-init_stack.bat
-# Choose option [1] for full stack
+# 3. Start full stack (Ollama Vulkan + NVIDIA Proxy 8089 + Hybrid Proxy 3456)
+INICIAR_STACK_UNIFICADO.bat
+# Escolha a opção correspondente ao stack completo
 
 # 4. Use /model in Claude Code
 # /model qwen        → qwen2.5-coder:7b (100% GPU)
@@ -34,23 +34,23 @@ init_stack.bat
 │                            CLAUDE CODE / FCC SERVER                         │
 │                         (Anthropic Messages API)                            │
 └─────────────────────────────────┬───────────────────────────────────────────┘
-                                  │ HTTP :8082  (Anthropic format)
+                                  │ HTTP :3456  (Anthropic format)
                                   ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                    HYBRID PROXY v1.2.0  (Python/FastAPI)                    │
-│  • Model aliases (27 short names)                                           │
+│  • Model aliases (32 short names)                                           │
 │  • Tier routing (fable/opus/sonnet/haiku) + fallback chains                 │
 │  • Custom provider CRUD API                                                 │
 │  • Active health checks / diagnostics                                       │
 │  • Token counting (tiktoken)                                                │
 │  • Anthropic → OpenAI format translation                                    │
 └─────────────────────────────────┬───────────────────────────────────────────┘
-                                  │ HTTP :18088 (OpenAI format)
+                                  │ HTTP :8089 (OpenAI format)
                                   ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                   NVIDIA PROXY (FastAPI, port 18088)                        │
+│                   NVIDIA PROXY (FastAPI, port 8089)                        │
 │  • Multi-provider: NVIDIA NIM + Google Gemini + Ollama                     │
-│  • Auto-discovery + model registry (89 models)                             │
+│  • Auto-discovery + model registry (177 models)                             │
 │  • Circuit breaker + rate limiting + metrics                               │
 │  • Admin UI :8082                                                          │
 └─────────┬───────────────────────┬───────────────────────┬───────────────────┘
@@ -74,15 +74,19 @@ init_stack.bat
 
 | Service | Port | Protocol | Key Endpoints |
 |---------|------|----------|---------------|
-| **Hybrid Proxy** | 8082 | Anthropic Messages | `/v1/messages`, `/v1/models`, `/health`, `/diagnostics`, `/v1/messages/count_tokens` |
-| **NVIDIA Proxy** | 18088 | OpenAI Chat Completions | `/v1/chat/completions`, `/v1/models`, `/health`, `/admin/*`, `/metrics` |
+| **Hybrid Proxy** | 3456 | Anthropic Messages | `/v1/messages`, `/v1/models`, `/health`, `/diagnostics` |
+| **NVIDIA Proxy** | 8089 | OpenAI Chat Completions | `/v1/chat/completions`, `/v1/models`, `/health`, `/admin/*`, `/metrics` |
 | **Ollama** | 11434 | Ollama Native | `/api/tags`, `/api/chat`, `/api/generate` |
-| **Admin UI** | 8082 | Web UI | NVIDIA Proxy admin panel |
-| **Metrics** | 9090 | Prometheus | `/metrics` |
+| **Admin UI / FCC** | 8082 | Web UI | NVIDIA Proxy admin panel |
+| **Prometheus** | 9090 | Prometheus | `/-/healthy` |
+| **Grafana** | 3000 | Grafana | `/api/health` |
+| **Loki** | 3100 | Loki | `/ready` |
+| **Alertmanager** | 9093 | Alertmanager | `/-/healthy` |
+| **Metrics (NVIDIA Proxy)** | 9091 | Prometheus | `/metrics` |
 
 ---
 
-## 🎭 Model Aliases (27)
+## 🎭 Model Aliases (32)
 
 | Alias | Resolves To | Provider | Tier |
 |-------|-------------|----------|------|
@@ -129,7 +133,7 @@ Register any OpenAI-compatible endpoint:
 
 ```bash
 # Via Hybrid Proxy API
-curl -X POST http://127.0.0.1:8082/admin/providers \
+curl -X POST http://127.0.0.1:3456/admin/providers \
   -H "x-api-key: local-proxy" \
   -H "Content-Type: application/json" \
   -d '{
@@ -150,12 +154,12 @@ Models become available as: `custom/my-provider/model-1`
 ## 📊 Model Discovery & Registry
 
 ```bash
-# Auto-discover from all 3 providers (89 models)
+# Auto-discover from all 3 providers (registry persistido, 177 entradas efetivas)
 python scripts/discover_models_uv.py
 
 # Outputs:
 # - Updates config.yaml (model_aliases, tier_routing, fallback_chains)
-# - Updates data/model_registry.json (89 entries with tier, health, metadata)
+# - Updates data/model_registry.json (177 entries with tier, health, metadata)
 ```
 
 **Features:**
@@ -192,19 +196,16 @@ per_model_config:
 
 | Script | Description |
 |--------|-------------|
+| `INICIAR_STACK_UNIFICADO.bat` | Unified initializer: Ollama → NVIDIA Proxy → Hybrid Proxy → Monitoring → free-claude-code. Health checks per service, prompts before killing processes on ports 8089/8082. |
 | `init_stack.bat` | Interactive menu: full stack, individual services, configure Claude, verify |
 | `start_all.bat` | Non-interactive: starts all 3 services sequentially |
 
-**init_stack.bat Menu:**
-```
-[1] Full Stack (Ollama + NVIDIA Proxy + Hybrid Proxy)
-[2] Only Ollama (Vulkan)
-[3] Only NVIDIA Proxy (18088)
-[4] Only Hybrid Proxy (8082)
-[5] Configure Claude Code for /model
-[6] Verify stack (health + model count + test request)
-[7] Stop all services
-```
+**INICIAR_STACK_UNIFICADO.bat flow:**
+1. Ollama Vulkan (porta 11434, `/api/tags`)
+2. NVIDIA Proxy (porta 8089, `/health`)
+3. Hybrid Proxy (porta 3456, `/health`)
+4. Monitoring Stack Docker Compose (Prometheus 9090, Grafana 3000, Loki 3100, Alertmanager 9093)
+5. free-claude-code --resume (janela separada)
 
 ---
 
@@ -217,14 +218,15 @@ ADMIN_TOKEN=your-secure-token               # Optional, for admin API
 ```
 
 ### `config.yaml` (Main config)
-- Provider instances (NIM, Gemini, Ollama)
-- Model aliases (27)
-- Tier routing & fallback chains
+- Provider instances (NIM, Gemini, Ollama, OpenAI)
+- Model aliases (32)
+- Tier routing & fallback chains (13 chains)
 - Ollama per-model Vulkan config
 - Reasoning effort mapping (Anthropic thinking → OpenAI reasoning_effort)
+- NVIDIA Proxy metrics on port 9091 (avoid conflict with Prometheus on 9090)
 
 ### `data/model_registry.json` (Auto-generated)
-- 89 model entries with metadata, health, tier assignment
+- 177 model entries with metadata, health, tier assignment
 
 ### `data/custom_providers.json` (Auto-generated)
 - Custom provider registrations
@@ -235,22 +237,28 @@ ADMIN_TOKEN=your-secure-token               # Optional, for admin API
 
 ```bash
 # Health checks
-curl http://127.0.0.1:18088/health
+curl http://127.0.0.1:11434/api/tags
+curl http://127.0.0.1:8089/health
+curl http://127.0.0.1:3456/health
 curl http://127.0.0.1:8082/health
+curl http://127.0.0.1:9090/-/healthy
+curl http://127.0.0.1:3000/api/health
+curl http://127.0.0.1:3100/ready
+curl http://127.0.0.1:9093/-/healthy
 
 # Model counts
-curl -s http://127.0.0.1:18088/v1/models | python -c "import sys,json; print(len(json.load(sys.stdin)['data']))"
-curl -s http://127.0.0.1:8082/v1/models | python -c "import sys,json; print(len(json.load(sys.stdin)['data']))"
+curl -s http://127.0.0.1:8089/v1/models | python -c "import sys,json; print(len(json.load(sys.stdin)['data']))"
+curl -s http://127.0.0.1:3456/v1/models | python -c "import sys,json; print(len(json.load(sys.stdin)['data']))"
 
 # Test model alias
-curl -X POST http://127.0.0.1:8082/v1/messages \
+curl -X POST http://127.0.0.1:3456/v1/messages \
   -H "Content-Type: application/json" \
   -H "x-api-key: local-proxy" \
   -H "anthropic-version: 2023-06-01" \
   -d '{"model":"qwen","max_tokens":50,"messages":[{"role":"user","content":"Hello"}]}'
 
 # Diagnostics
-curl http://127.0.0.1:8082/diagnostics
+curl http://127.0.0.1:3456/diagnostics
 ```
 
 ---
@@ -258,19 +266,20 @@ curl http://127.0.0.1:8082/diagnostics
 ## 📁 Project Structure
 
 ```
-C:\FCC\ClaudeProxy\
-├── hybrid.py                 # Hybrid Proxy v1.2.0 (main entry)
-├── config.yaml               # Main configuration
-├── init_stack.bat            # Interactive startup menu
-├── start_all.bat             # Non-interactive startup
-├── setup-terminal.ps1        # Terminal theming (Oh My Posh + Starship)
-├── .env.example              # Environment template
+C:\FCC\allinone\
+├── INICIAR_STACK_UNIFICADO.bat   # Unified startup initializer
+├── run_server.py                 # NVIDIA Proxy Windows-safe entry point
+├── config.yaml                   # Main configuration
+├── hybrid.py                     # Hybrid Proxy v1.2.0 (main entry)
+├── setup-terminal.ps1            # Terminal theming (Oh My Posh + Starship)
+├── .env.example                  # Environment template
 ├── scripts/
-│   └── discover_models_uv.py # Model discovery (uv-based)
+│   └── discover_models_uv.py     # Model discovery (uv-based)
 ├── data/
-│   ├── model_registry.json   # 89 models (auto-generated)
-│   └── custom_providers.json # Custom providers (auto-generated)
-└── README.md                 # This file
+│   ├── model_registry.json       # 177 models (auto-generated)
+│   └── custom_providers.json     # Custom providers (auto-generated)
+├── README.md                     # This file
+└── RELATORIO_DISCREPANCIAS.md    # Discrepancy report vs README/config/state
 ```
 
 ---
@@ -301,11 +310,12 @@ C:\FCC\ClaudeProxy\
 
 | Issue | Solution |
 |-------|----------|
-| Port 18088/8082 in use | `init_stack.bat` option [7] stops all, or `netstat -ano \| findstr :18088` |
+| Port 8089/3456 in use | `INICIAR_STACK_UNIFICADO.bat` prompts before killing; or `netstat -ano \| findstr :8089` |
 | `/model` shows only 2 options | Fix `settings.json`: `availableModels: []`, add `modelPicker.options` |
 | NIM models not appearing | Check `NGC_API_KEY` in `.env`, verify NVIDIA Proxy health |
 | Ollama Vulkan not working | Verify `OLLAMA_VULKAN=1`, `CUDA_VISIBLE_DEVICES=-1`, update drivers |
 | Custom provider not routing | Check `data/custom_providers.json`, Hybrid Proxy debug logs |
+| NVIDIA Proxy `/metrics` inaccessible | Prometheus occupies 9090; metrics moved to 9091 in `config.yaml` |
 
 ---
 
@@ -326,5 +336,5 @@ MIT License — Free for personal and commercial use.
 ---
 
 **Version:** 1.2.0  
-**Date:** 2026-11-22  
+**Date:** 2026-11-25  
 **Status:** Production Ready ✅

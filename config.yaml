@@ -1,5 +1,5 @@
 host: 0.0.0.0
-port: 10089
+port: 8089
 workers: 1
 reload: false
 log_level: INFO
@@ -37,6 +37,17 @@ ollama_instances:
   enabled: true
   keep_alive: 5m
   gpu_layers: 999
+openai_instances:
+- name: openai-default
+  base_url: https://api.openai.com/v1
+  api_key: "${OPENAI_API_KEY}"
+  models: []
+  weight: 100
+  max_concurrent: 50
+  timeout_seconds: 60.0
+  health_check_interval: 30
+  enabled: true
+  auto_discover: true
   env_vars:
     CUDA_VISIBLE_DEVICES: '-1'
     OLLAMA_VULKAN: '1'
@@ -50,8 +61,8 @@ ollama_instances:
   vram_total_mb: 5500
   vram_safety_margin_mb: 500
   per_model_config:
-    # TIER: heavy (single-load only, ~4-5GB each)
-    qwen2.5-coder:7b:
+    # TIER: heavy (single-load only, ~4-5GB each) - Modelos -gpu90 (90% GPU offload)
+    qwen2.5-coder:7b-gpu90:
       quantization: Q4_K_M
       context_window: 2048
       context_window_extended: 4096
@@ -63,7 +74,7 @@ ollama_instances:
       vram_mb: 4200
       temperature: 0.0
       flash_attention: true
-      description: Especialista em código - 100% GPU (performance máxima)
+      description: Especialista em código - 100% GPU (performance máxima) - 7B -gpu90
     qwen3:8b-gpu90:
       quantization: Q3_K_M
       context_window: 4096
@@ -78,8 +89,8 @@ ollama_instances:
       flash_attention: true
       reasoning_effort_default: medium
       reasoning_format: parsed
-      description: Reasoning nativo - 90% GPU (32/36 layers), 10% CPU
-    deepseek-coder:6.7b:
+      description: Reasoning nativo - 90% GPU (32/36 layers), 10% CPU - 8B -gpu90
+    deepseek-coder:6.7b-gpu90:
       quantization: Q4_K_M
       context_window: 2048
       context_window_extended: 4096
@@ -93,7 +104,7 @@ ollama_instances:
       temperature: 0.0
       flash_attention: true
       description: Otimizado GTX 1060 6GB - 100% GPU offload (num_gpu=99), contexto
-        2K, batch 128
+        2K, batch 128 - 6.7B -gpu90
     # TIER: light (dual-load OK, ~1-1.5GB each)
     qwen2.5-coder:1.5b:
       quantization: Q4_K_M
@@ -169,7 +180,24 @@ admin_ui:
 metrics:
   enabled: true
   path: /metrics
-  port: 9090
+  port: 9091
+# Portas declaradas para evitar conflito com Prometheus (9090) e documentar serviços do stack
+hybrid_proxy:
+  enabled: true
+  host: 127.0.0.1
+  port: 3456
+grafana:
+  enabled: true
+  host: 127.0.0.1
+  port: 3000
+loki:
+  enabled: true
+  host: 127.0.0.1
+  port: 3100
+alertmanager:
+  enabled: true
+  host: 127.0.0.1
+  port: 9093
 logging:
   level: INFO
   format: json
@@ -186,9 +214,10 @@ model_aliases:
   fable: nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b
   nemotron: nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b
   nemotron-ultra: nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b
-  opus: gemini/gemini-2.5-pro
-  gemini-pro: gemini/gemini-2.5-pro
-  gemini-35-pro: gemini/gemini-2.5-pro
+  # opus/gemini-pro remapped to working flash-lite (quota excedida em pro/3.8-flash)
+  opus: gemini/gemini-3.1-flash-lite
+  gemini-pro: gemini/gemini-3.1-flash-lite
+  gemini-35-pro: gemini/gemini-3.1-flash-lite
   nemotron-safety: nvidia_nim/nvidia/llama-3.1-nemotron-safety-guard-8b-v3
   sonnet: ollama/qwen2.5-coder:7b-gpu90
   qwen: ollama/qwen2.5-coder:7b-gpu90
@@ -197,10 +226,11 @@ model_aliases:
   qwen3: ollama/qwen3:8b-gpu90
   deepseek: ollama/deepseek-coder:6.7b-gpu90
   deepseek-coder: ollama/deepseek-coder:6.7b-gpu90
-  gemini-flash: gemini/gemini-3.8-flash
-  gemini-38-flash: gemini/gemini-3.8-flash
-  gemini-35-flash: gemini/gemini-3.8-flash
-  gemini-flash-latest: gemini/gemini-3.8-flash
+  # gemini-flash aliases remapped to working flash-lite (quota excedida em 3.8-flash/3.5-flash)
+  gemini-flash: gemini/gemini-3.1-flash-lite
+  gemini-38-flash: gemini/gemini-3.1-flash-lite
+  gemini-35-flash: gemini/gemini-3.1-flash-lite
+  gemini-flash-latest: gemini/gemini-3.1-flash-lite
   starcoder2: nvidia_nim/bigcode/starcoder2-15b
   gemma-3-12b: nvidia_nim/google/gemma-3-12b-it
   minimax-m3: nvidia_nim/minimaxai/minimax-m3.1-flash
@@ -210,12 +240,20 @@ model_aliases:
   gemini-38-flash-lite: gemini/gemini-3.1-flash-lite
   kimi-pro: custom/nim-direct/moonshotai/kimi-k3.1-pro
   kimi: custom/nim-direct/moonshotai/kimi-k3.1-pro
-  gemini-35-flash-lite: gemini/gemini-3.5-flash-lite
-  deepseek-coder:6.7b: ollama/deepseek-coder:6.7b
+  gemini-35-flash-lite: gemini/gemini-3.1-flash-lite
+  deepseek-coder:6.7b: ollama/deepseek-coder:6.7b-gpu90
   # Light models for concurrency (Tier: light)
   qwen-light: ollama/qwen2.5-coder:1.5b
   qwen-micro: ollama/qwen2.5:0.5b
   tinyllama: ollama/tinyllama:1.1b
+  # GPT models (OpenAI)
+  gpt-4o: openai/gpt-4o
+  gpt-4o-mini: openai/gpt-4o-mini
+  gpt-4-turbo: openai/gpt-4-turbo
+  gpt-4: openai/gpt-4
+  gpt-3.5-turbo: openai/gpt-3.5-turbo
+  gpt-35-turbo: openai/gpt-3.5-turbo
+  gpt: openai/gpt-4o
 tier_routing:
   fable:
     description: Highest capability models (Nemotron 3 Ultra, largest models)
@@ -229,6 +267,7 @@ tier_routing:
     preferred_providers:
     - nvidia_nim
     - gemini
+    - openai
     fallback_tiers:
     - sonnet
     - haiku
@@ -237,6 +276,7 @@ tier_routing:
     preferred_providers:
     - ollama
     - gemini
+    - openai
     fallback_tiers:
     - haiku
   haiku:
@@ -244,54 +284,71 @@ tier_routing:
     preferred_providers:
     - ollama
     - gemini
+    - openai
     fallback_tiers: []
 fallback_chains:
   ollama/qwen2.5-coder:7b-gpu90:
   - ollama/qwen3:8b-gpu90
   - ollama/deepseek-coder:6.7b-gpu90
-  - gemini/gemini-3.8-flash
-  - gemini/gemini-3.5-flash
+  - gemini/gemini-3.1-flash-lite
   - nvidia_nim/bigcode/starcoder2-15b
   ollama/qwen3:8b-gpu90:
   - ollama/qwen2.5-coder:7b-gpu90
   - ollama/deepseek-coder:6.7b-gpu90
-  - gemini/gemini-3.8-flash
+  - gemini/gemini-3.1-flash-lite
   - nvidia_nim/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
   ollama/deepseek-coder:6.7b-gpu90:
   - ollama/qwen2.5-coder:7b-gpu90
   - ollama/qwen3:8b-gpu90
-  - gemini/gemini-3.5-flash
+  - gemini/gemini-3.1-flash-lite
   - nvidia_nim/bigcode/starcoder2-15b
   nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b:
-  - gemini/gemini-3.8-flash
-  - ollama/qwen2.5-coder:7b
+  - gemini/gemini-3.1-flash-lite
+  - ollama/qwen2.5-coder:7b-gpu90
   - nvidia_nim/nvidia/nemotron-3.5-super-vl-120b-a12b
   nvidia_nim/nvidia/nemotron-3.5-super-vl-120b-a12b:
   - nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b
-  - ollama/qwen2.5-coder:7b
+  - ollama/qwen2.5-coder:7b-gpu90
   nvidia_nim/bigcode/starcoder2-15b:
-  - ollama/deepseek-coder:6.7b
-  - gemini/gemini-3.8-flash
-  - ollama/qwen2.5-coder:7b
+  - ollama/deepseek-coder:6.7b-gpu90
+  - gemini/gemini-3.1-flash-lite
+  - ollama/qwen2.5-coder:7b-gpu90
   nvidia_nim/google/gemma-3-12b-it:
   - gemini/gemma-4-26b-a4b-it
-  - gemini/gemini-3.8-flash
-  - ollama/qwen2.5-coder:7b
+  - gemini/gemini-3.1-flash-lite
+  - ollama/qwen2.5-coder:7b-gpu90
   nvidia_nim/minimaxai/minimax-m3.1-flash:
-  - gemini/gemini-3.8-flash
-  - gemini/gemini-3.5-flash
-  - ollama/qwen2.5-coder:7b
+  - gemini/gemini-3.1-flash-lite
+  - ollama/qwen2.5-coder:7b-gpu90
   nvidia_nim/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:
-  - ollama/qwen3:8b
-  - gemini/gemini-3.8-flash
-  gemini/gemini-3.8-flash:
-  - gemini/gemini-3.5-flash
-  - ollama/qwen2.5-coder:7b
+  - ollama/qwen3:8b-gpu90
+  - gemini/gemini-3.1-flash-lite
+  gemini/gemini-3.1-flash-lite:
+  - ollama/qwen2.5-coder:7b-gpu90
   - nvidia_nim/bigcode/starcoder2-15b
-  gemini/gemini-3.5-flash:
-  - gemini/gemini-3.8-flash
-  - ollama/qwen2.5-coder:7b
-  - nvidia_nim/bigcode/starcoder2-15b
+  - nvidia_nim/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
+  # GPT fallback chains (OpenAI)
+  openai/gpt-4o:
+  - openai/gpt-4o-mini
+  - openai/gpt-4-turbo
+  - nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b
+  - ollama/qwen2.5-coder:7b-gpu90
+  openai/gpt-4o-mini:
+  - openai/gpt-3.5-turbo
+  - nvidia_nim/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
+  - ollama/qwen2.5-coder:1.5b
+  openai/gpt-4-turbo:
+  - openai/gpt-4o
+  - nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b
+  - gemini/gemini-3.1-flash-lite
+  openai/gpt-4:
+  - openai/gpt-4-turbo
+  - nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b
+  - ollama/qwen2.5-coder:7b-gpu90
+  openai/gpt-3.5-turbo:
+  - openai/gpt-4o-mini
+  - nvidia_nim/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
+  - ollama/qwen2.5-coder:1.5b
 model_registry:
   auto_discovery_enabled: true
   discovery_interval_minutes: 30
